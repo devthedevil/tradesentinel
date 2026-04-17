@@ -1,0 +1,80 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: trading-alerts
+  namespace: monitoring
+  labels:
+    prometheus: kube-prometheus
+    role: alert-rules
+spec:
+  groups:
+    - name: trading.latency
+      rules:
+        - alert: HighExecutionLatencyP99
+          expr: >
+            histogram_quantile(0.99,
+              rate(order_execution_latency_seconds_bucket[1m])) > 0.03
+          for: 1m
+          labels:
+            severity: warning
+            team: trading-ops
+          annotations:
+            summary: "High P99 execution latency on {{ $labels.instance }}"
+            description: "P99 latency is {{ $value | humanizeDuration }}, above 30ms threshold."
+            runbook_url: "https://runbooks.internal/high-latency"
+
+        - alert: CriticalExecutionLatencyP99
+          expr: >
+            histogram_quantile(0.99,
+              rate(order_execution_latency_seconds_bucket[1m])) > 0.1
+          for: 30s
+          labels:
+            severity: critical
+            team: trading-ops
+          annotations:
+            summary: "CRITICAL: P99 latency above 100ms"
+            runbook_url: "https://runbooks.internal/critical-latency"
+
+    - name: trading.kafka
+      rules:
+        - alert: KafkaConsumerLagWarning
+          expr: kafka_consumergroup_lag{namespace="trading"} > 100
+          for: 30s
+          labels:
+            severity: warning
+          annotations:
+            summary: "Kafka consumer lag above warning threshold"
+            description: "Group {{ $labels.consumergroup }} topic {{ $labels.topic }} lag={{ $value }}"
+
+        - alert: KafkaConsumerLagCritical
+          expr: kafka_consumergroup_lag{namespace="trading"} > 1000
+          for: 1m
+          labels:
+            severity: critical
+          annotations:
+            summary: "CRITICAL: Kafka consumer lag extremely high"
+
+    - name: trading.kubernetes
+      rules:
+        - alert: PodCrashLoopBackOff
+          expr: >
+            kube_pod_container_status_waiting_reason{
+              namespace=~"trading|streaming",
+              reason="CrashLoopBackOff"} == 1
+          for: 2m
+          labels:
+            severity: critical
+            team: trading-ops
+          annotations:
+            summary: "Pod {{ $labels.pod }} is in CrashLoopBackOff"
+            runbook_url: "https://runbooks.internal/pod-crash"
+
+        - alert: HighOrderRejectionRate
+          expr: >
+            rate(orders_rejected_total[5m]) / rate(orders_total[5m]) > 0.01
+          for: 2m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Order rejection rate above 1%"
+            description: "Current rate: {{ $value | humanizePercentage }}"
